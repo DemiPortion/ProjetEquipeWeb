@@ -1,0 +1,2 @@
+{"error":"Failed to write file","context":{"filename":"\/var\/www\/html\/ProjetEquipeWeb\/builds\/build_21_index.html"},"timestamp":"2024-12-13 15:41:47"}
+{"error":"Failed to write file","context":{"filename":"\/var\/www\/html\/ProjetEquipeWeb\/builds\/build_22_index.html"},"timestamp":"2024-12-13 15:42:48"}

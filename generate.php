@@ -1,11 +1,15 @@
 <?php
 // generate.php
+   ini_set('display_errors', '1');
+ini_set('display_startup_errors', '1');
+error_reporting(E_ALL);
 
 if (file_exists('config.php')) {
     $config = include('config.php');
 } else {    
     $config['api_key_open_ai'] = null;
 }
+
 
 // Retrieve the API key and AI provider from the config file
 $IA_USED = $config['ia_used'];
@@ -112,10 +116,10 @@ function getGeneratedFiles($prompt, $API_KEY, $MODEL, $IA_USED) {
         $IA_USED === 'gemini' ? '' : 'Authorization: Bearer ' . $API_KEY,
     ]);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
-
     // Execute the request
     $response = curl_exec($ch);
-    if (curl_errno($ch)) {
+	    
+if (curl_errno($ch)) {
         // Handle cURL errors
         logError('cURL Error: ' . curl_error($ch));
         curl_close($ch);
