@@ -1,2 +1,2 @@
-var message = 'hello world' 
-console.log ( message )
+var test = "erreur"; 
+console.log(test);
