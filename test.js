@@ -1,2 +1,2 @@
-var test = "erreur"; 
+var test = 'erreur';
 console.log(test);
