@@ -1,197 +1,131 @@
 <?php
-// generate.php
-   ini_set('display_errors', '1');
-ini_set('display_startup_errors', '1');
+// Activer l'affichage des erreurs pour le debug
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
+header('Content-Type: application/json');
 
+// Vérifier la configuration
 if (file_exists('config.php')) {
     $config = include('config.php');
-} else {    
-    $config['api_key_open_ai'] = null;
+} else {
+    respondWithError('Missing config.php');
 }
 
+// Définition des paramètres IA
+$IA_USED = $config['ia_used'] ?? 'openai';
+$API_KEY = $IA_USED === 'gemini' ? ($config['api_key_gemini'] ?? null) : ($config['api_key_open_ai'] ?? null);
+$MODEL = $IA_USED === 'gemini' ? ($config['gemini_model'] ?? 'gemini-1.5-pro-latest') : 'gpt-4o-mini';
+$buildsDir = __DIR__ . '/builds';
 
-// Retrieve the API key and AI provider from the config file
-$IA_USED = $config['ia_used'];
-$API_KEY = $IA_USED === 'gemini' ? $config['api_key_gemini'] : $config['api_key_open_ai'];
- // Adjust the model based on the provider
- if($IA_USED === 'gemini'){
-    $GEM_MODEL = ($config['gemini_model'] != null) ? $config['gemini_model'] : 'gemini-1.5-flash-latest';
-    $MODEL =  $GEM_MODEL != null ? $GEM_MODEL : 'gemini-1.5-flash-latest';
- } else {
-    $MODEL = 'gpt-4o-mini';
- }
-$buildsDir = __DIR__ . '/builds'; // Directory where generated files are stored
-
-// If the API key is not defined, fallback to serving a random build
+// Vérifier la clé API
 if (empty($API_KEY)) {
-    serveRandomBuild($buildsDir);
-    exit;
+    respondWithError('API key is missing.');
 }
 
-// Read the data from the request body
+// Lire et vérifier les données JSON reçues
 $data = json_decode(file_get_contents('php://input'), true);
 $description = $data['description'] ?? '';
 
 if (empty($description)) {
-    respondWithError('No description provided');
-    exit;
+    respondWithError('No description provided.');
 }
 
-// Increment a build number
+// Numéro de build unique
 $buildNumber = incrementBuildCount('build_count.txt');
 
-// Create a prompt to generate a complete HTML file with inline CSS and JS
+// Construire le prompt
 $prompt = buildPrompt($description);
 
-// Send the prompt to the selected API and get a response
+// Appel de l'API pour générer le code
 $generatedFiles = getGeneratedFiles($prompt, $API_KEY, $MODEL, $IA_USED);
 
-if (!$generatedFiles) {
-    respondWithError('Invalid format received from generated files');
-    exit;
+if (!$generatedFiles || !isset($generatedFiles['files'])) {
+    respondWithError('Invalid response format from AI API.', $generatedFiles);
 }
 
-// Check if the builds directory exists, otherwise create it
+// Vérifier et créer le dossier builds
 if (!is_dir($buildsDir)) {
-    mkdir($buildsDir, 0775, true);  // Create the directory with 775 permissions
+    mkdir($buildsDir, 0775, true);
 }
 
-// Write the generated files to disk and get their links
+// Sauvegarde des fichiers générés
 $fileLinks = saveGeneratedFiles($generatedFiles, $buildNumber, $buildsDir);
 
 if (empty($fileLinks)) {
-    respondWithError('Failed to write generated files');
-    exit;
+    respondWithError('Failed to save generated files.');
 }
 
-// Return the links of the generated files in JSON format
+// Retourne la réponse JSON correcte
 echo json_encode(['links' => $fileLinks]);
+exit;
 
 /**
- * Sends the prompt to the selected API and retrieves the generated files.
- *
- * @param string $prompt The prompt to send to the API.
- * @param string $API_KEY The API key for authentication.
- * @param string $MODEL The model to use for generation.
- * @param string $IA_USED The AI provider to use ('openai' or 'gemini').
- * @return array|null The generated files or null in case of error.
+ * Fonction pour appeler l'API d'IA et récupérer les fichiers générés.
  */
 function getGeneratedFiles($prompt, $API_KEY, $MODEL, $IA_USED) {
+    $apiUrl = ($IA_USED === 'gemini') ?
+        "https://generativelanguage.googleapis.com/v1beta/models/$MODEL:generateContent?key=$API_KEY" :
+        "https://api.openai.com/v1/chat/completions";
 
-     if ($IA_USED === 'gemini') {
-        // Configuration for the Gemini API
-        $apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL:generateContent?key=$API_KEY";
-        $params = [
-            'temperature' => 0.7,
-            'maxTokens' => 300
-        ];
-        $data = [
-            "contents" => [
-                [
-                    "role" => "user",
-                    "parts" => [
-                        [
-                            "text" => $prompt
-                        ]
-                    ]
-                ]
-            ]
-        ];
-        $postData = json_encode($data);
-    
-    } elseif ($IA_USED === 'openai') {
-        // Configuration for the OpenAI API
-        $apiUrl = 'https://api.openai.com/v1/chat/completions';
-        $postData = json_encode([
-            'model' => $MODEL,
-            'messages' => [['role' => 'user', 'content' => $prompt]],
-            'max_tokens' => 10000,
-        ]);
-    } else {
-        // Unsupported AI provider
-        return null;
+    $postData = json_encode([
+        'model' => $MODEL,
+        'messages' => [['role' => 'user', 'content' => $prompt]],
+        'max_tokens' => 10000
+    ]);
+
+    $headers = ['Content-Type: application/json'];
+    if ($IA_USED === 'openai') {
+        $headers[] = 'Authorization: Bearer ' . $API_KEY;
     }
 
-    // Initialize cURL
     $ch = curl_init($apiUrl);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json',
-        $IA_USED === 'gemini' ? '' : 'Authorization: Bearer ' . $API_KEY,
-    ]);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
-    // Execute the request
+    
     $response = curl_exec($ch);
-	    
-if (curl_errno($ch)) {
-        // Handle cURL errors
+
+    if (curl_errno($ch)) {
         logError('cURL Error: ' . curl_error($ch));
         curl_close($ch);
         return null;
     }
     curl_close($ch);
 
-    // Decode the JSON response
-    if ($IA_USED === 'gemini') {
-        $response = json_decode($response, true);
-
-        // Process the Gemini API response
-        if (isset($response['candidates'][0]['content']['parts'][0]['text'])) {
-            // Extract raw content
-            $rawContent = $response['candidates'][0]['content']['parts'][0]['text'];
-            // Clean to retrieve JSON encapsulated in text
-            $cleanedText = str_replace(['```json', '```'], '', $rawContent);
-            $cleanedContent = trim($cleanedText);
-
-            // Decode the JSON to obtain files
-            $decodedContent = json_decode($cleanedContent, true);
-            if ($decodedContent && isset($decodedContent['files'][0]['content'])) {
-                // Process the generated files
-                return $decodedContent; // Display the extracted files
-            } else {
-                // Display an error if the JSON is invalid
-                echo "Error: Unable to decode cleaned JSON content.";
-                dd($cleanedContent, false); // Verify the content in case of failure
-            }
-        }
-    } elseif ($IA_USED === 'openai') {
-        $response = json_decode($response, true);
-
-        // Process the OpenAI API response
-        if (isset($response['choices'][0]['message']['content'])) {
-            $cleanedResponse = trim($response['choices'][0]['message']['content'], "```json");
-            $cleanedResponse = trim($cleanedResponse, "```");
-            return json_decode($cleanedResponse, true);
-        }
+    // Vérification du JSON
+    $responseData = json_decode($response, true);
+    if (!$responseData) {
+        logError('Invalid JSON response', $response);
+        return null;
     }
 
-    // In case of unexpected response format
-    logError('Unexpected response format', $response);
-    return null;
+    return $responseData;
 }
 
 /**
- * Serves a random HTML file from the builds directory if available.
+ * Fonction pour sauvegarder les fichiers générés.
  */
-function serveRandomBuild($buildsDir) {
-    if (is_dir($buildsDir)) {
-        $files = glob($buildsDir . '/*.html');
-        if ($files && count($files) > 0) {
-            $randomFile = $files[array_rand($files)];
-            $fileLink = '/builds/' . basename($randomFile);
-            echo json_encode(['links' => [$fileLink]]);
-        } else {
-            respondWithError('No builds available.');
+function saveGeneratedFiles($generatedFiles, $buildNumber, $buildsDir) {
+    $fileLinks = [];
+
+    foreach ($generatedFiles['files'] as $file) {
+        $filename = "$buildsDir/build_$buildNumber" . '_' . $file['file_title'];
+        $result = file_put_contents($filename, $file['content']);
+
+        if ($result === false) {
+            logError('Failed to write file', ['filename' => $filename]);
+            return [];
         }
-    } else {
-        respondWithError('Builds directory not found.');
+
+        $fileLinks[] = "/builds/build_$buildNumber" . '_' . $file['file_title'];
     }
+    return $fileLinks;
 }
 
 /**
- * Increments the build count stored in a file.
+ * Fonction pour incrémenter le numéro de build.
  */
 function incrementBuildCount($filePath) {
     if (!file_exists($filePath)) {
@@ -203,16 +137,11 @@ function incrementBuildCount($filePath) {
 }
 
 /**
- * Builds the prompt to be sent to OpenAI's API.
+ * Fonction pour construire le prompt à envoyer à l'IA.
  */
 function buildPrompt($description) {
-    return "You are a professional web developer. Your task is to generate a complete and valid HTML document based on the following user description: " . $description . ".\n" .
-           "Please structure the HTML file as follows:\n" .
-           "- Include a <style> tag inside the <head> section for any required CSS styles.\n" .
-           "- Include a <script> tag just before the closing </body> tag for any necessary JavaScript functionality.\n" .
-           "The HTML file should be clean, responsive, and follow best practices in modern web development.\n\n" .
-           "Return the result in a JSON format with the following structure:\n" .
-           "```json\n" .
+    return "You are a professional web developer. Generate a complete and valid HTML document based on: " . $description . ".\n\n" .
+           "Return JSON in this format:\n" .
            "{\n" .
            '  "files": [\n' .
            '    {\n' .
@@ -220,37 +149,20 @@ function buildPrompt($description) {
            '      "content": "<HTML content>"\n' .
            "    }\n" .
            "  ]\n" .
-           "}\n" .
-           "```\nMake sure that the 'content' field contains the complete HTML, CSS, and JS all in a single HTML file.";
+           "}\n";
 }
 
 /**
- * Saves the generated files to disk and returns their links.
+ * Fonction pour répondre avec une erreur JSON.
  */
-function saveGeneratedFiles($generatedFiles, $buildNumber, $buildsDir) {
-    $fileLinks = [];
-
-    if (!isset($generatedFiles['files'])) {
-        logError('Invalid format received from the API', $generatedFiles);
-        return [];
-    }
-    foreach ($generatedFiles['files'] as $file) {
-        $filename = $buildsDir . "/build_$buildNumber" . '_' . $file['file_title'];
-        $result = file_put_contents($filename, $file['content']);
-
-        if ($result === false) {
-            logError('Failed to write file', ['filename' => $filename]);
-            return [];
-        }
-
-        $fileLinks[] = "/builds/build_$buildNumber" . '_' . $file['file_title'];
-    }
-
-    return $fileLinks;
+function respondWithError($message, $context = []) {
+    http_response_code(400);
+    echo json_encode(['error' => $message, 'details' => $context]);
+    exit;
 }
 
 /**
- * Logs errors to a file for debugging purposes.
+ * Fonction pour enregistrer les erreurs dans un fichier.
  */
 function logError($message, $context = []) {
     $logEntry = [
@@ -260,24 +172,4 @@ function logError($message, $context = []) {
     ];
     file_put_contents('error_log.txt', json_encode($logEntry) . "\n", FILE_APPEND);
 }
-
-/**
- * Sends an error response in JSON format.
- */
-function respondWithError($errorMessage) {
-    echo json_encode(['error' => $errorMessage]);
-}
-
-/**
- * Debugging function to dump and optionally terminate the script.
- */
-function dd($data, $die = true) {
-    echo '<pre>';
-    var_dump($data);
-    echo '</pre>';
-    if ($die){
-        die();
-    }
-}
-
 ?>
